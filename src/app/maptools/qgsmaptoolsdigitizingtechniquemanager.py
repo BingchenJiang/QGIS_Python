@@ -99,7 +99,7 @@ class QgsMapToolsDigitizingTechniqueManager:
                 button.setDefaultAction(action)
             app.mDynamicActions[item['sourceKey']] = {
                 'action': action, 'handler': 'setShapeTool', 'toolbar': item['toolbar'],
-                'note': getattr(cls, 'instructions', '预览/右键完成/取消/退点，正多边形边数') + '；原版元数据分组/图标、原生几何构造及父工具完成。复杂 Z/M、拓扑与圆弧圆心辅助线尚待逐项对齐。'}
+                'note': getattr(cls, 'instructions', '预览/右键完成/取消/退点，正多边形边数') + '；原版元数据分组/图标、原生几何构造及父工具完成。目标 Z/M 维度、矩形/正多边形首个捕捉高程及半径圆弧 R 键圆心辅助已补入，待统一调试；复杂 Z/M 插值和拓扑仍待对齐。'}
 
     def parentAvailable(self, parent):
         if parent is None or sip.isdeleted(parent): return False
@@ -132,7 +132,7 @@ class QgsMapToolsDigitizingTechniqueManager:
             self.updateActions()
             return
         canvas.setMapTool(parent)
-        parent.stopCapturing()
+        if not self.SHAPE_TOOLS[toolId].continuePreviousCurve: parent.stopCapturing()
         parent.setCurrentCaptureTechnique(Qgis.CaptureTechnique.StraightSegments)
         if self.mShapeTool is not None:
             self.mShapeTool.dispose()
@@ -149,9 +149,10 @@ class QgsMapToolsDigitizingTechniqueManager:
     def finishShape(self, tool, curve, event):
         parent, canvas = tool.mParentTool, self.mApp.mMapCanvas
         if not self.parentAvailable(parent): return
+        tool.prepareCurve(curve, parent.mapPoint(event))
         canvas.setMapTool(parent)
         parent.setCurrentCaptureTechnique(Qgis.CaptureTechnique.StraightSegments)
-        parent.clearCurve()
+        if not tool.continuePreviousCurve: parent.clearCurve()
         # addCurve owns c (and deletes it after cross-CRS conversion), although
         # the QGIS 3.34 SIP declaration omits Transfer. Release before the call.
         sip.transferto(curve, None)

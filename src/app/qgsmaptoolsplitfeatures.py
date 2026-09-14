@@ -9,6 +9,12 @@ class _GeometryEditCapture(QgsMapToolCapture):
         super().__init__(canvas, cadDock, mode)
         self.mOperation = operation
 
+    def supportsTechnique(self, technique):
+        if self.mOperation in ('addRing', 'fillRing', 'addPart'):
+            return technique in (Qgis.CaptureTechnique.StraightSegments, Qgis.CaptureTechnique.Streaming) or (
+                self.mode() != self.CapturePoint and technique in (Qgis.CaptureTechnique.CircularString, Qgis.CaptureTechnique.Shape))
+        return super().supportsTechnique(technique)
+
     def cadCanvasReleaseEvent(self, event):
         geometry = None
         if self.mode() == self.CapturePoint and event.button() == Qt.LeftButton:
@@ -40,7 +46,8 @@ class _GeometryEditCapture(QgsMapToolCapture):
                 result = layer.addCurvedRing(geometry.constGet().exteriorRing().clone())
                 success = (result[0] if isinstance(result, tuple) else result) == Qgis.GeometryOperationResult.Success
             elif self.mOperation == 'addPart':
-                result = layer.addPartV2([QgsPointXY(point) for point in points])
+                # The QgsPoint overload preserves Z/M; the XY overload discarded them.
+                result = layer.addPartV2(points)
                 success = result == Qgis.GeometryOperationResult.Success
             else:
                 candidates = layer.getSelectedFeatures() if layer.selectedFeatureCount() else layer.getFeatures(QgsFeatureRequest().setFilterRect(geometry.boundingBox()))

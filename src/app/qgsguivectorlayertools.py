@@ -37,10 +37,11 @@ class QgsGuiVectorLayerTools(QgsVectorLayerTools):
                 return True
         return layer.rollBack()
 
-    def addFeature(self, layer, defaultValues={}, defaultGeometry=QgsGeometry(), parentWidget=None, showModal=True, hideParent=False):
+    def addFeature(self, layer, defaultValues={}, defaultGeometry=QgsGeometry(), parentWidget=None, showModal=True, hideParent=False, expressionContext=None):
         if not layer or not layer.isEditable():
             return False, None
-        feature = QgsVectorLayerUtils.createFeature(layer, defaultGeometry, defaultValues, layer.createExpressionContext())
+        feature = QgsVectorLayerUtils.createFeature(layer, defaultGeometry, defaultValues,
+            expressionContext if expressionContext is not None else layer.createExpressionContext())
         disableAttributeDialog = QgsSettings().value(
             'qgis/digitizing/disable_enter_attribute_values_dialog', False, type=bool)
         if disableAttributeDialog:

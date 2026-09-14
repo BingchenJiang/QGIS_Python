@@ -41,6 +41,7 @@ from qgis.gui import (
     QgsAttributeTableFilterModel, QgsCustomLayerOrderWidget, QgsMapOverviewCanvas,
 )
 from .qgsguivectorlayertools import QgsGuiVectorLayerTools
+from .qgsmaptooladdfeature import QgsMapToolAddFeature
 from .qgisappinterface import QgisAppInterface
 from .qgsapplayertreeviewmenuprovider import QgsAppLayerTreeViewMenuProvider
 from .qgsmaptoolselect import QgsMapToolSelect
@@ -453,7 +454,7 @@ class QgisApp(QMainWindow):
                          'measureArea': QgsMeasureTool(canvas, True),
                          'measureBearing': QgsMapToolMeasureBearing(canvas),
                          'measureAngle': QgsMapToolMeasureAngle(canvas),
-                         'addFeature': QgsMapToolDigitizeFeature(canvas, self.mAdvancedDigitizingDockWidget)}
+                         'addFeature': QgsMapToolAddFeature(canvas, self.mAdvancedDigitizingDockWidget, self)}
         self.mMapTools['addFeature'].digitizingCompleted.connect(self.digitizingCompleted)
         self.mMapTools.update({
             'moveFeature': QgsMapToolMoveFeature(canvas, QgsMapToolMoveFeature.Move, self.mAdvancedDigitizingDockWidget),
@@ -703,7 +704,7 @@ class QgisApp(QMainWindow):
             if name == 'Image': note += 'HTTP(S) 异步加载、base64/data URI、将本地/网络图片嵌入工程。'
             self.bind('mActionDecoration' + name, self.mDecorations[name].run, note=note)
         self.bind('mActionNewReport', self.newReport, note='原生报表树、静态/字段分组章节与原版配置表单；嵌套分组、排序、独立页眉/正文/页脚开关、空组显示策略、章节移动/升降级/复制/删除、布局编辑、PDF 与 QGZ 保存。')
-        self.bind('mActionElevationProfile', self.createElevationProfile, note='原生剖面画布、独立图层树与高程配置、绘制/选中线/地图拾取、左右偏移、范围识别、距离/高差测量、捕捉与地图联动、单位与轴比例、PDF/图片/三类数据导出代码已接入，待统一运行调试；专用 X 轴缩放及完整导出设置表单仍待移植。')
+        self.bind('mActionElevationProfile', self.createElevationProfile, note='原生剖面画布、高程图层过滤/图例筛选/符号提示、勾选状态保存恢复、内部排序/跨树复制拖入、绘制/选中线/地图拾取、偏移、识别、测量及裁剪、捕捉与地图联动、十种单位、轴比例与 X 轴缩放、原版图片/PDF 导出设置表单及三类数据导出已接入；图层树核心检查通过，整体交互和导出结果待统一调试。')
         self.mActionModifyAnnotation.setCheckable(True)
         self.mMapToolActionGroup.addAction(self.mActionModifyAnnotation)
         self.mMapTools['modifyAnnotation'].setAction(self.mActionModifyAnnotation)
@@ -1670,8 +1671,7 @@ class QgisApp(QMainWindow):
     def digitizingCompleted(self, feature):
         layer = self.vectorLayer()
         if layer and layer.isEditable():
-            self.mVectorLayerTools.addFeature(layer, defaultGeometry=feature.geometry(), parentWidget=self)
-            layer.triggerRepaint()
+            return self.mMapTools['addFeature'].addFeature(layer, feature)
 
     def copySelectionToClipboard(self, layer=None):
         layer = self.vectorLayer(layer)

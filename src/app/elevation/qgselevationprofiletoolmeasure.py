@@ -95,8 +95,29 @@ class QgsElevationProfileToolMeasure(QgsPlotTool):
     def updateRubberBand(self, *args):
         if self.mStartPoint is None or self.mEndPoint is None: return
         a, b = (self.canvas().plotPointToCanvasPoint(p) for p in (self.mStartPoint, self.mEndPoint))
-        self.mRubberBand.setLine(QLineF(a.toQPointF(), b.toQPointF()))
+        line = self.clipLine(QLineF(a.toQPointF(), b.toQPointF()), self.canvas().plotArea())
+        if line is None:
+            self.mRubberBand.hide()
+            return
+        self.mRubberBand.setLine(line)
         self.mRubberBand.show()
+
+    @staticmethod
+    def clipLine(line, bounds):
+        """Clip the display only; preserve the measured endpoints when zooming."""
+        start, end = 0., 1.
+        for direction, distance in ((-line.dx(), line.x1() - bounds.left()),
+                                    (line.dx(), bounds.right() - line.x1()),
+                                    (-line.dy(), line.y1() - bounds.top()),
+                                    (line.dy(), bounds.bottom() - line.y1())):
+            if direction == 0:
+                if distance < 0: return None
+                continue
+            ratio = distance / direction
+            if direction < 0: start = max(start, ratio)
+            else: end = min(end, ratio)
+            if start > end: return None
+        return QLineF(line.pointAt(start), line.pointAt(end))
 
     def clear(self):
         self.mMeasureInProgress = False

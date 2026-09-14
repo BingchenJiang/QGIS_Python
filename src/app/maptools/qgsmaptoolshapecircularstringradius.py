@@ -3,11 +3,11 @@ from qgis.PyQt import sip
 from qgis.PyQt.QtCore import Qt
 from qgis.core import QgsPoint, QgsCircularString, QgsLineString, QgsGeometry, QgsGeometryUtils
 from qgis.gui import QgsDoubleSpinBox
-from src.gui.maptools.qgsmaptoolshapeabstract import QgsMapToolShapeAbstract
+from .qgsmaptoolshapecircularstringabstract import QgsMapToolShapeCircularStringAbstract
 
 
-class QgsMapToolShapeCircularStringRadius(QgsMapToolShapeAbstract):
-    instructions = '左键起点、终点；输入半径并移动选择弧侧，再左键确认；可继续下一段，右键完成已确认弧段；退格撤段，Esc 取消'
+class QgsMapToolShapeCircularStringRadius(QgsMapToolShapeCircularStringAbstract):
+    instructions = '左键起点、终点；输入半径并移动选择弧侧，再左键确认；按住 R 查看圆心/半径辅助；右键完成，退格撤段，Esc 取消'
 
     def __init__(self, *args):
         super().__init__(*args)
@@ -24,18 +24,21 @@ class QgsMapToolShapeCircularStringRadius(QgsMapToolShapeAbstract):
 
     def updatePreview(self):
         self.mTempRubberBand.hide()
+        self.mCenterPointRubberBand.hide()
         if not self.mPoints: return
         points = self.mPoints[:]
         if self.mTemporaryEndPoint is not None and self.mLastPoint is not None:
             ok, middle = QgsGeometryUtils.segmentMidPoint(points[-1], self.mTemporaryEndPoint, self.mRadius, self.mLastPoint)
             if not ok: return
             points.extend((middle, self.mTemporaryEndPoint))
+            self.updateCenterPointRubberBand(points[-3:])
         if len(points) >= 3:
             curve = QgsCircularString()
             curve.setPoints(points)
         elif self.mLastPoint is not None:
             curve = QgsLineString([points[-1], self.mLastPoint])
         else: return
+        self.prepareCurve(curve, self.mTemporaryEndPoint)
         self.mTempRubberBand.setToGeometry(QgsGeometry(curve), None)
         self.mTempRubberBand.show()
 
@@ -83,7 +86,7 @@ class QgsMapToolShapeCircularStringRadius(QgsMapToolShapeAbstract):
             elif len(self.mPoints) >= 3: del self.mPoints[-2:]
             else: self.mPoints.clear()
             self.updatePreview()
-            event.accept()
+            event.ignore()
         else: super().keyPressEvent(event)
 
     def clean(self):

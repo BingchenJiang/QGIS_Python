@@ -1,8 +1,9 @@
 from math import hypot
 from qgis.PyQt import sip
 from qgis.PyQt.QtCore import Qt
-from qgis.core import QgsCircle, QgsPoint, QgsPointXY, QgsGeometry, QgsLineString
-from qgis.gui import QgsDoubleSpinBox
+from qgis.PyQt.QtGui import QColor
+from qgis.core import Qgis, QgsCircle, QgsPoint, QgsPointXY, QgsGeometry, QgsLineString
+from qgis.gui import QgsDoubleSpinBox, QgsRubberBand
 from .qgsmaptoolshapecircleabstract import QgsMapToolShapeCircleAbstract
 
 
@@ -13,6 +14,11 @@ class QgsMapToolShapeCircle2TangentsPoint(QgsMapToolShapeCircleAbstract):
         super().__init__(*args)
         self.mRadius, self.mRadiusSpinBox = 1.0, None
         self.mCenters = []
+        self.mCentersRubberBand = QgsRubberBand(self.canvas(), Qgis.GeometryType.Point)
+        self.mCentersRubberBand.setColor(QColor('red'))
+        self.mCentersRubberBand.setIcon(QgsRubberBand.ICON_CROSS)
+        self.mCentersRubberBand.setIconSize(9)
+        self.mCentersRubberBand.hide()
 
     def deleteRadiusSpinBox(self):
         if self.mRadiusSpinBox is not None and not sip.isdeleted(self.mRadiusSpinBox): self.mRadiusSpinBox.deleteLater()
@@ -20,6 +26,7 @@ class QgsMapToolShapeCircle2TangentsPoint(QgsMapToolShapeCircleAbstract):
 
     def getPossibleCenter(self):
         self.mCenters.clear()
+        self.mCentersRubberBand.hide()
         if len(self.mPoints) != 4 or self.mRadius <= 0: return
         a, b, c, d = self.mPoints
         dx1, dy1, dx2, dy2 = b.x()-a.x(), b.y()-a.y(), d.x()-c.x(), d.y()-c.y()
@@ -34,6 +41,8 @@ class QgsMapToolShapeCircle2TangentsPoint(QgsMapToolShapeCircleAbstract):
                 v1 = nx1*a.x()+ny1*a.y()+side1*self.mRadius
                 v2 = nx2*c.x()+ny2*c.y()+side2*self.mRadius
                 self.mCenters.append(QgsPoint((v1*ny2-ny1*v2)/det, (nx1*v2-v1*nx2)/det))
+        self.mCentersRubberBand.setToGeometry(QgsGeometry.fromMultiPointXY([QgsPointXY(p) for p in self.mCenters]), None)
+        self.mCentersRubberBand.show()
 
     def radiusSpinBoxChanged(self, radius):
         self.mRadius = radius
@@ -50,11 +59,12 @@ class QgsMapToolShapeCircle2TangentsPoint(QgsMapToolShapeCircleAbstract):
         if self.mLastPoint is None: return
         curve = self.circleAt(self.mLastPoint)
         if curve is not None:
+            self.prepareCurve(curve, self.mLastPoint)
             self.mTempRubberBand.setToGeometry(QgsGeometry(curve), None)
             self.mTempRubberBand.show()
 
     def cadCanvasMoveEvent(self, event):
-        self.mLastPoint = QgsPoint(event.mapPoint())
+        self.mLastPoint = self.mParentTool.mapPoint(event)
         if len(self.mPoints) == 4:
             self.updatePreview()
         else:
@@ -71,7 +81,7 @@ class QgsMapToolShapeCircle2TangentsPoint(QgsMapToolShapeCircleAbstract):
             if not match.hasEdge():
                 self.mManager.mApp.mMessageBar.pushInfo('切线圆', '请开启捕捉并选取线段')
                 return
-            self.mPoints.extend(QgsPoint(p) for p in match.edgePoints())
+            self.mPoints.extend(self.mParentTool.mapPoint(p) for p in match.edgePoints())
             if len(self.mPoints) == 4:
                 self.getPossibleCenter()
                 if not self.mCenters:
@@ -93,12 +103,19 @@ class QgsMapToolShapeCircle2TangentsPoint(QgsMapToolShapeCircleAbstract):
         if event.key() in (Qt.Key_Backspace, Qt.Key_Delete):
             del self.mPoints[-2:]
             self.mCenters.clear()
+            self.mCentersRubberBand.hide()
             self.deleteRadiusSpinBox()
             self.mTempRubberBand.hide()
-            event.accept()
+            event.ignore()
         else: super().keyPressEvent(event)
 
     def clean(self):
         self.deleteRadiusSpinBox()
         self.mCenters.clear()
+        self.mCentersRubberBand.hide()
         super().clean()
+
+    def dispose(self):
+        super().dispose()
+        self.canvas().scene().removeItem(self.mCentersRubberBand)
+        sip.delete(self.mCentersRubberBand)

@@ -6,13 +6,16 @@ uses native CAD events, geometry constructors and a native capture parent.
 from qgis.PyQt import sip
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QColor
-from qgis.core import Qgis, QgsGeometry, QgsPointXY, QgsSettings
+from math import isfinite
+from qgis.core import Qgis, QgsGeometry, QgsPoint, QgsPointXY, QgsSettings, QgsWkbTypes, QgsVectorLayer, QgsVertexId
 from qgis.gui import QgsMapToolAdvancedDigitizing, QgsRubberBand, QgsSpinBox
 
 
 class QgsMapToolShapeAbstract(QgsMapToolAdvancedDigitizing):
     pointCount = 2
     regularPolygon = False
+    keepFirstSnappedZ = False
+    continuePreviousCurve = False
 
     def __init__(self, toolId, parentTool, manager):
         super().__init__(parentTool.canvas(), manager.mApp.mAdvancedDigitizingDockWidget)
@@ -25,6 +28,7 @@ class QgsMapToolShapeAbstract(QgsMapToolAdvancedDigitizing):
         self.mTempRubberBand.setWidth(2)
         self.mTempRubberBand.hide()
         self.setCursor(Qt.CrossCursor)
+        self.setAutoSnapEnabled(True)
 
     def layer(self): return self.mParentTool.layer()
 
@@ -47,6 +51,43 @@ class QgsMapToolShapeAbstract(QgsMapToolAdvancedDigitizing):
 
     def shapeCurve(self, points): raise NotImplementedError
 
+    def prepareCurve(self, curve, finalPoint=None):
+        """Apply the upstream planar-Z rule before the parent takes ownership."""
+        points = list(self.mPoints)
+        if finalPoint is not None: points.append(finalPoint)
+        defaultZ = QgsSettings().value('qgis/digitizing/default_z_value', 0., type=float)
+        defaultM = QgsSettings().value('qgis/digitizing/default_m_value', 0., type=float)
+        if hasattr(self.mParentTool, 'defaultZValue'): defaultZ = self.mParentTool.defaultZValue()
+        if hasattr(self.mParentTool, 'defaultMValue'): defaultM = self.mParentTool.defaultMValue()
+        elevations = [p.z() for p in points if QgsWkbTypes.hasZ(p.wkbType()) and isfinite(p.z())]
+        measures = [p.m() for p in points if QgsWkbTypes.hasM(p.wkbType()) and isfinite(p.m())]
+        if self.keepFirstSnappedZ:
+            snappedZ = next((z for z in elevations if z != defaultZ), None)
+            if snappedZ is not None:
+                curve.dropZValue()
+                curve.addZValue(snappedZ)
+        layer = self.layer()
+        if isinstance(layer, QgsVectorLayer):
+            if QgsWkbTypes.hasZ(layer.wkbType()):
+                if not curve.is3D(): curve.addZValue(elevations[0] if elevations else defaultZ)
+            else: curve.dropZValue()
+            if QgsWkbTypes.hasM(layer.wkbType()):
+                if not curve.isMeasure(): curve.addMValue(measures[0] if measures else defaultM)
+            else: curve.dropMValue()
+            # Mixed 2D/3D control points may leave NaN ordinates in a 3D curve.
+            # Preserve the constructor's finite values; fill only missing ones.
+            for index in range(curve.numPoints()):
+                point = QgsPoint(curve.pointN(index))
+                changed = False
+                if curve.is3D() and not isfinite(point.z()):
+                    point.setZ(defaultZ)
+                    changed = True
+                if curve.isMeasure() and not isfinite(point.m()):
+                    point.setM(defaultM)
+                    changed = True
+                if changed: curve.moveVertex(QgsVertexId(0, 0, index), point)
+        return curve
+
     def updatePreview(self):
         self.mTempRubberBand.hide()
         if not self.mPoints or self.mLastPoint is None: return
@@ -54,6 +95,7 @@ class QgsMapToolShapeAbstract(QgsMapToolAdvancedDigitizing):
         if len(points) != self.pointCount: return
         curve = self.shapeCurve(points)
         if curve is None or curve.isEmpty(): return
+        self.prepareCurve(curve, self.mLastPoint)
         self.mTempRubberBand.setToGeometry(QgsGeometry(curve), None)
         self.mTempRubberBand.show()
 
@@ -86,11 +128,11 @@ class QgsMapToolShapeAbstract(QgsMapToolAdvancedDigitizing):
         if event.key() == Qt.Key_Escape:
             self.clean()
             self.cadDockWidget().clearPoints()
-            event.accept()
+            event.ignore()
         elif event.key() in (Qt.Key_Backspace, Qt.Key_Delete):
             if self.mPoints: self.mPoints.pop()
             self.updatePreview()
-            event.accept()
+            event.ignore()
         else: super().keyPressEvent(event)
 
     def clean(self):

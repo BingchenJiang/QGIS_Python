@@ -1,7 +1,7 @@
 """Elevation profile controller using native layer, plot and export APIs."""
 from pathlib import Path
 from qgis.PyQt import sip
-from qgis.PyQt.QtCore import Qt, QTimer, QSizeF
+from qgis.PyQt.QtCore import Qt, QTimer, QSizeF, QSize, QMarginsF
 from qgis.PyQt.QtGui import QColor, QPainter, QImage
 from qgis.PyQt.QtWidgets import (QWidget, QVBoxLayout, QToolBar, QFileDialog, QLabel,
     QSplitter, QMenu, QToolButton, QActionGroup, QDialog, QListWidget, QListWidgetItem,
@@ -17,6 +17,8 @@ from .qgsmaptoolprofilecurve import QgsMapToolProfileCurve
 from .qgsmaptoolprofilecurvefromfeature import QgsMapToolProfileCurveFromFeature
 from .qgselevationprofiletoolidentify import QgsElevationProfileToolIdentify
 from .qgselevationprofiletoolmeasure import QgsElevationProfileToolMeasure
+from src.gui.plot.qgsplottoolxaxiszoom import QgsPlotToolXAxisZoom
+from src.gui.elevation.qgselevationprofilelayertreeview import QgsElevationProfileLayerTreeView
 
 
 class QgsElevationProfileLayersDialog(QDialog):
@@ -61,12 +63,10 @@ class QgsElevationProfileWidget(QgsDockWidget):
         self.mSplitter = QSplitter(Qt.Horizontal)
         layout.addWidget(self.mSplitter)
         self.mLayerTree = QgsLayerTree()
-        self.mLayerTreeModel = QgsLayerTreeModel(self.mLayerTree, self)
-        self.mLayerTreeModel.setFlag(QgsLayerTreeModel.AllowNodeReorder)
-        self.mLayerTreeModel.setFlag(QgsLayerTreeModel.AllowNodeChangeVisibility)
-        self.mLayerTreeModel.setFlag(QgsLayerTreeModel.ShowLegend, False)
-        self.mLayerTreeView = QgsLayerTreeView()
-        self.mLayerTreeView.setModel(self.mLayerTreeModel)
+        self.mLayerTreeView = QgsElevationProfileLayerTreeView(self.mLayerTree, self)
+        self.mLayerTreeModel = self.mLayerTreeView.layerTreeModel()
+        self.mLayerTreeView.populateInitialLayers(app.mProject)
+        self.mLayerTreeView.addLayers.connect(self.addLayersInternal)
         self.mLayerTreeView.setContextMenuPolicy(Qt.CustomContextMenu)
         self.mLayerTreeView.customContextMenuRequested.connect(self.layerContextMenu)
         self.mLayerTreeView.doubleClicked.connect(lambda *_: self.editLayerElevation())
@@ -93,6 +93,7 @@ class QgsElevationProfileWidget(QgsDockWidget):
         for tool in (self.mCaptureCurveMapTool, self.mCaptureCurveFromFeatureMapTool):
             tool.curveCaptured.connect(self.setProfileCurve)
         self.mPanTool, self.mZoomTool = QgsPlotToolPan(self.mCanvas), QgsPlotToolZoom(self.mCanvas)
+        self.mXAxisZoomTool = QgsPlotToolXAxisZoom(self.mCanvas)
         self.mIdentifyTool = QgsElevationProfileToolIdentify(self.mCanvas, app)
         self.mMeasureTool = QgsElevationProfileToolMeasure(self.mCanvas)
         self.mPlotToolGroup = QActionGroup(self)
@@ -150,6 +151,7 @@ class QgsElevationProfileWidget(QgsDockWidget):
         for name, title, icon, tool in (
             ('identifyToolAction', '识别', 'mActionIdentify.svg', self.mIdentifyTool),
             ('panToolAction', '平移', 'mActionPan.svg', self.mPanTool),
+            ('zoomXAxisToolAction', '缩放 X 轴', 'mActionZoomInXAxis.svg', self.mXAxisZoomTool),
             ('zoomToolAction', '框选缩放', 'mActionZoomIn.svg', self.mZoomTool),
             ('measureToolAction', '测量距离和高差', 'mActionMeasure.svg', self.mMeasureTool)):
             self.addAction(name, title, icon, lambda t=tool: self.mCanvas.setTool(t), True, tool)
@@ -184,7 +186,11 @@ class QgsElevationProfileWidget(QgsDockWidget):
         self.mToolBar.addWidget(self.mTolerance)
         units = QMenu('距离单位', self)
         group = QActionGroup(units)
-        for unit in (Qgis.DistanceUnit.Meters, Qgis.DistanceUnit.Kilometers, Qgis.DistanceUnit.Feet, Qgis.DistanceUnit.Miles, Qgis.DistanceUnit.Degrees):
+        for unit in (Qgis.DistanceUnit.Kilometers, Qgis.DistanceUnit.Meters,
+                     Qgis.DistanceUnit.Centimeters, Qgis.DistanceUnit.Millimeters,
+                     Qgis.DistanceUnit.Miles, Qgis.DistanceUnit.NauticalMiles,
+                     Qgis.DistanceUnit.Yards, Qgis.DistanceUnit.Feet,
+                     Qgis.DistanceUnit.Inches, Qgis.DistanceUnit.Degrees):
             action = units.addAction(QgsUnitTypes.toString(unit))
             action.setCheckable(True)
             action.setData(int(unit))
@@ -223,8 +229,13 @@ class QgsElevationProfileWidget(QgsDockWidget):
 
     def addLayersInternal(self, layers):
         for layer in layers:
+            if self.mApp.mProject.mapLayer(layer.id()) is not layer: continue
+            properties = layer.elevationProperties()
+            if not ((properties and properties.hasElevation()) or QgsElevationUtils.canEnableElevationForLayer(layer)): continue
             self.mExcludedLayerIds.discard(layer.id())
             QgsElevationUtils.enableElevationForLayer(layer)
+            self.mLayerTreeView.addLayer(layer)
+            layer.setCustomProperty('_include_in_elevation_profiles', True)
             node = self.mLayerTree.findLayer(layer.id())
             if node: node.setItemVisibilityChecked(True)
         self.mApp.mProject.setDirty(True)
@@ -237,12 +248,14 @@ class QgsElevationProfileWidget(QgsDockWidget):
             available = self.mApp.mProject.mapLayers()
             for node in list(self.mLayerTree.findLayers()):
                 layer = available.get(node.layerId())
-                if layer is None or not layer.elevationProperties() or not layer.elevationProperties().hasElevation():
+                if layer is None:
                     self.mLayerTree.removeChildNode(node)
             for layer in available.values():
-                if layer.id() not in self.mExcludedLayerIds and layer.elevationProperties() and layer.elevationProperties().hasElevation() and not self.mLayerTree.findLayer(layer.id()):
-                    self.mLayerTree.addLayer(layer)
-            layers = [node.layer() for node in self.mLayerTree.findLayers() if node.isVisible() and node.layer()]
+                if layer.id() not in self.mExcludedLayerIds: self.mLayerTreeView.addLayer(layer)
+                self.mLayerTreeModel.refreshLayer(layer)
+            self.mLayerTreeView.proxyModel().invalidateFilter()
+            layers = [node.layer() for node in self.mLayerTree.findLayers() if node.isVisible() and node.layer()
+                      and node.layer().elevationProperties() and node.layer().elevationProperties().hasElevation()]
             self.mCanvas.setLayers(list(reversed(layers)))
             self.mUpdateTimer.start()
             if not layers: self.mStatus.setText('没有显示的高程图层；可添加图层或双击图层配置高程。')
@@ -254,6 +267,7 @@ class QgsElevationProfileWidget(QgsDockWidget):
         self.updateCanvasLayers()
 
     def layerContextMenu(self, pos):
+        self.mLayerTreeView.setCurrentIndex(self.mLayerTreeView.indexAt(pos))
         menu = QMenu(self)
         menu.addAction('高程属性…', self.editLayerElevation).setEnabled(self.mLayerTreeView.currentLayer() is not None)
         menu.addAction('从此剖面移除', self.removeSelectedLayers)
@@ -404,32 +418,76 @@ class QgsElevationProfileWidget(QgsDockWidget):
         plot.setXMaximum(distance.upper() / factor)
         plot.setYMinimum(elevation.lower())
         plot.setYMaximum(elevation.upper())
+        # The native canvas' plot() is not bound. Compute readable intervals for
+        # its visible ranges instead of using Qgs2DPlot's fixed defaults.
+        image = QImage(1, 1, QImage.Format_ARGB32_Premultiplied)
+        painter = QPainter(image)
+        try:
+            plot.setSize(QSizeF(max(1, self.mCanvas.width()), max(1, self.mCanvas.height())))
+            plot.calculateOptimisedIntervals(QgsRenderContext.fromQPainter(painter))
+        finally: painter.end()
         return plot
 
-    def exportImage(self, path=None, width=1600, height=900):
+    def exportImage(self, path=None, width=1600, height=900, settingsDialog=None):
         if self.mProfileCurve.isEmpty(): return False
-        if path is None: path, _ = QFileDialog.getSaveFileName(self, '导出剖面图', '', 'PNG (*.png)')
+        interactive = path is None
+        if interactive: path, _ = QFileDialog.getSaveFileName(self, '导出剖面图', QgsSettings().value('lastProfileExportDir', ''), 'PNG (*.png)')
         if not path: return False
+        plot = self.plotSettings()
+        if interactive or settingsDialog is not None:
+            from .qgselevationprofileimageexportdialog import QgsElevationProfileImageExportDialog
+            dialog = settingsDialog or QgsElevationProfileImageExportDialog(self)
+            if settingsDialog is None:
+                dialog.setImageSize(QSize(width, height))
+                dialog.setPlotSettings(plot)
+            accepted = dialog.exec_()
+            if accepted:
+                size = dialog.imageSize()
+                width, height = size.width(), size.height()
+                dialog.updatePlotSettings(plot)
+            if settingsDialog is None: dialog.deleteLater()
+            if not accepted: return False
+        if width <= 0 or height <= 0: return False
         if not str(path).lower().endswith('.png'): path = str(path) + '.png'
         image = QImage(width, height, QImage.Format_ARGB32_Premultiplied)
+        if image.isNull():
+            self.mApp.mMessageBar.pushWarning('剖面导出', '无法分配图片内存，请减小输出宽高')
+            return False
         image.fill(QColor('white'))
         painter = QPainter(image)
-        try: self.mCanvas.render(QgsRenderContext.fromQPainter(painter), width, height, self.plotSettings())
+        try: self.mCanvas.render(QgsRenderContext.fromQPainter(painter), width, height, plot)
         finally: painter.end()
         success = image.save(str(path), 'PNG')
         if not success: self.mApp.mMessageBar.pushWarning('高程剖面', '无法保存图片')
+        else: QgsSettings().setValue('lastProfileExportDir', str(Path(path).parent))
         return success
 
-    def exportAsPdf(self, path=None):
+    def exportAsPdf(self, path=None, settingsDialog=None):
         from qgis.PyQt.QtPrintSupport import QPrinter
+        from qgis.PyQt.QtGui import QPageSize, QPageLayout
         if self.mProfileCurve.isEmpty(): return False
-        if path is None: path, _ = QFileDialog.getSaveFileName(self, '导出剖面 PDF', '', 'PDF (*.pdf)')
+        interactive = path is None
+        if interactive: path, _ = QFileDialog.getSaveFileName(self, '导出剖面 PDF', QgsSettings().value('lastProfileExportDir', ''), 'PDF (*.pdf)')
         if not path: return False
+        plot, pageSize = self.plotSettings(), QSizeF(297, 210)
+        if interactive or settingsDialog is not None:
+            from .qgselevationprofilepdfexportdialog import QgsElevationProfilePdfExportDialog
+            dialog = settingsDialog or QgsElevationProfilePdfExportDialog(self)
+            if settingsDialog is None: dialog.setPlotSettings(plot)
+            accepted = dialog.exec_()
+            if accepted:
+                pageSize = dialog.pageSizeMM().toQSizeF()
+                dialog.updatePlotSettings(plot)
+            if settingsDialog is None: dialog.deleteLater()
+            if not accepted: return False
         if not str(path).lower().endswith('.pdf'): path = str(path) + '.pdf'
         printer = QPrinter(QPrinter.HighResolution)
         printer.setOutputFormat(QPrinter.PdfFormat)
         printer.setOutputFileName(str(path))
-        printer.setOrientation(QPrinter.Landscape)
+        pageLayout = QPageLayout(QPageSize(pageSize, QPageSize.Millimeter), QPageLayout.Portrait, QMarginsF(0, 0, 0, 0))
+        pageLayout.setMode(QPageLayout.FullPageMode)
+        printer.setPageLayout(pageLayout)
+        printer.setFullPage(True)
         printer.setResolution(300)
         painter = QPainter()
         if not painter.begin(printer):
@@ -439,11 +497,13 @@ class QgsElevationProfileWidget(QgsDockWidget):
             area = printer.pageRect(QPrinter.DevicePixel)
             context = QgsRenderContext.fromQPainter(painter)
             context.setFlag(Qgis.RenderContextFlag.ForceVectorOutput, True)
-            self.mCanvas.render(context, area.width(), area.height(), self.plotSettings())
+            self.mCanvas.render(context, area.width(), area.height(), plot)
         finally: painter.end()
+        QgsSettings().setValue('lastProfileExportDir', str(Path(path).parent))
         return True
 
     def visibilityChangedHandler(self, visible):
+        if self.mShutdown: return
         if not visible:
             if self.mApp.mMapCanvas.mapTool() in (self.mCaptureCurveMapTool, self.mCaptureCurveFromFeatureMapTool): self.mApp.setMapTool('pan')
             self.mCaptureCurveMapTool.stopCapturing()
@@ -482,6 +542,7 @@ class QgsElevationProfileWidget(QgsDockWidget):
         for task in list(self.mExportTasks):
             if not sip.isdeleted(task): task.cancel(); task.waitForFinished()
         self.mExportTasks.clear()
+        self.mCanvas.unsetTool(self.mCanvas.tool())
         self.mMeasureTool.dispose()
         for band in (self.mRubberBand, self.mToleranceRubberBand, self.mHoverMarker):
             self.mApp.mMapCanvas.scene().removeItem(band)

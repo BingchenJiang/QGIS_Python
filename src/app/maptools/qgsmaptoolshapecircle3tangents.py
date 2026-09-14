@@ -49,7 +49,7 @@ class QgsMapToolShapeCircle3Tangents(QgsMapToolShapeCircleAbstract):
             del self.mPoints[-2:]
             if self.mPosPoints: self.mPosPoints.pop()
             self.mTempRubberBand.hide()
-            event.accept()
+            event.ignore()
         else: super().keyPressEvent(event)
 
     def clean(self):

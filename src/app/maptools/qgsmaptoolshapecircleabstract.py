@@ -12,6 +12,6 @@ class QgsMapToolShapeCircleAbstract(QgsMapToolShapeAbstract):
 
     def circleCurve(self, circle):
         if circle.isEmpty(): return None
-        if self.layer().crs() != self.canvas().mapSettings().destinationCrs():
+        if self.layer() is not None and self.layer().crs() != self.canvas().mapSettings().destinationCrs():
             return circle.toLineString(self.segments())
         return circle.toCircularString()

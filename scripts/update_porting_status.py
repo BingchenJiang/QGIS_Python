@@ -4,11 +4,11 @@ import json
 root = Path(__file__).resolve().parents[1]
 
 # Concrete omissions belonging to each action, not broad pending QA or an
-# unfinished neighboring action. Shapes share unfinished capture Z/M/topology.
+# unfinished neighboring action. Shapes still need complex Z/M/topology parity;
+# basic target dimensions, planar snapped Z and the radius arc center aid exist.
 PARTIAL_ACTIONS = {
     'mActionEmbedLayers',                 # Individual embedded layers.
-    'mActionElevationProfile',            # X-axis-only zoom and full export settings forms.
-    'mesh:mActionDigitizing',             # Face picking and element dragging.
+    'mesh:mActionDigitizing',             # Face/edge picking and movement; vertex movement exists.
     'mesh:mActionSelectByPolygon',        # Polygon selection of faces.
     'mesh:mActionSelectByExpression',     # Face selection highlight/zoom.
     'mesh:mActionTransformCoordinates',   # Full face/edge preview.
@@ -18,7 +18,7 @@ PARTIAL_ACTIONS = {
 }
 
 # Implementations written in a batch awaiting the user's combined runtime QA.
-PENDING_RUNTIME_ACTIONS = {'mMainAnnotationLayerProperties'}
+PENDING_RUNTIME_ACTIONS = {'mMainAnnotationLayerProperties', 'mActionElevationProfile'}
 
 
 def implementationState(action):

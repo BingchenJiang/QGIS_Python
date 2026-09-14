@@ -15,7 +15,7 @@ from qgis.PyQt.QtWidgets import (QAction, QMenu, QMessageBox, QWidgetAction, QWi
 from qgis.core import (Qgis, QgsMesh, QgsMeshLayer, QgsExpression, QgsExpressionContext,
     QgsExpressionContextUtils, QgsPoint, QgsPointXY, QgsGeometry, QgsCoordinateTransform,
     QgsApplication, QgsMeshEditRefineFaces, QgsRectangle, QgsSettings, QgsRenderContext,
-    QgsMeshEditForceByPolylines, QgsLineString, QgsCsException)
+    QgsMeshEditForceByPolylines, QgsLineString, QgsCsException, QgsMeshTransformVerticesByExpression)
 from qgis.gui import (QgsMapToolAdvancedDigitizing, QgsRubberBand, QgsDoubleSpinBox,
     QgsUnitSelectionWidget, QgsIdentifyMenu)
 
@@ -93,6 +93,12 @@ class QgsMapToolEditMeshFrame(QgsMapToolAdvancedDigitizing):
         self.mShutdown = False
         self.mFailedSaves = set()
         self.mVertexCache = None
+        self.mStartMovingPoint = None
+        self.mMovingLayer = None
+        self.mMovingVertices = []
+        self.mMovingVerticesRubberBand = QgsRubberBand(canvas, Qgis.GeometryType.Point)
+        self.mMovingVerticesRubberBand.setIconSize(9)
+        self.mMovingVerticesRubberBand.hide()
         self.mSelectionRubberBand = QgsRubberBand(canvas, Qgis.GeometryType.Point)
         self.mSelectionRubberBand.setColor(QColor('yellow'))
         self.mSelectionRubberBand.setIconSize(7)
@@ -132,7 +138,7 @@ class QgsMapToolEditMeshFrame(QgsMapToolAdvancedDigitizing):
             if key == 'mActionReindexMesh': note = '原生图层 reindex；确认后重新编号顶点/面、清空选择并更新画布，撤销历史按原版清除。'
             if key in ('mActionRemoveVerticesFillingHole', 'mActionRemoveVerticesWithoutFillingHole'):
                 note = '对选中顶点调用原生删除接口，反馈拓扑错误/未删除顶点并更新选择、画布和撤销状态。'
-            if key == 'mActionDigitizing': note = '双击添加顶点、单击选顶点、Ctrl 左键依次选已有顶点/右键构面；原生拓扑检查与撤销。原版边拖动/顶点移动/面拾取仍有缺口。'
+            if key == 'mActionDigitizing': note = '双击添加顶点、单击选顶点、Ctrl 左键依次选已有顶点/右键构面；点击已选顶点移动单个或多个顶点、预览/确认/取消，原生拓扑校验与撤销。移动代码待统一交互调试；边/面拾取与拖动仍待补齐。'
             if key == 'mActionSelectByPolygon': note = '多边形选择顶点，Shift 添加/Ctrl 移除；面触碰/完全包含选择未移植。'
             if key == 'mActionTransformCoordinates': note = '原版停靠 UI；原生 XYZ 表达式计算/校验、顶点预览、应用、单顶点坐标导入及撤销；完整面边预览待补。'
             if key == 'mActionForceByLines': note = '左键绘制约束折线/右键完成，空闲时右键拾取线或面边界；捕捉 Z、CRS 转换、交点顶点、Z 插值、容差、原生网孔约束与撤销。'
@@ -218,6 +224,7 @@ class QgsMapToolEditMeshFrame(QgsMapToolAdvancedDigitizing):
 
     def activateWithState(self, state):
         if not self.editor(): return
+        self.cancelMovingSelection()
         self.mCurrentState = state
         self.mSelectionPoints.clear()
         self.mFaceVertices.clear()
@@ -234,11 +241,12 @@ class QgsMapToolEditMeshFrame(QgsMapToolAdvancedDigitizing):
         self.mZValueWidget.setPrefix('新顶点 Z：')
         self.mApp.addUserInputWidget(self.mZValueWidget)
         message = ('左键确定约束折线各点，右键执行；未绘线时右键拾取已有线/面。下拉设置交点、Z 来源及容差。'
-                   if self.mCurrentState == 'ForceByLines' else '双击添加顶点；单击选顶点；Ctrl 左键依次选已有顶点，右键构面。面编辑可用表达式选择。')
+                   if self.mCurrentState == 'ForceByLines' else '双击添加顶点；单击选顶点，Shift 加选；再次点击已选顶点开始移动，再点击确认，右键/Esc 取消。Ctrl 左键依次选顶点，右键构面。')
         self.mApp.mMessageBar.pushInfo('网孔数字化', message)
         self.updateSelection()
 
     def deactivate(self):
+        self.cancelMovingSelection()
         self.mForcingPoints.clear()
         self.mSelectionPoints.clear()
         self.mFaceVertices.clear()
@@ -290,6 +298,7 @@ class QgsMapToolEditMeshFrame(QgsMapToolAdvancedDigitizing):
         if self.mShutdown: return
         layer = self.layer()
         if self.mCurrentLayer is not layer:
+            self.cancelMovingSelection()
             self.mCurrentLayer = layer
             self.mVertexCache = None
             self.mSelectedVertices.clear()
@@ -320,6 +329,7 @@ class QgsMapToolEditMeshFrame(QgsMapToolAdvancedDigitizing):
 
     def onEdit(self):
         if self.mShutdown: return
+        self.cancelMovingSelection()
         self.mVertexCache = None
         self.mFaceVertices.clear()
         self.mRubberBand.reset(Qgis.GeometryType.Line)
@@ -332,11 +342,15 @@ class QgsMapToolEditMeshFrame(QgsMapToolAdvancedDigitizing):
 
     def canvasDoubleClickEvent(self, event):
         if self.mCurrentState != 'Digitizing' or not self.editor() or event.button() != Qt.LeftButton: return
+        self.cancelMovingSelection()
         z = self.mZValueWidget.value() if self.mZValueWidget else 0
         self.editor().addPointsAsVertices([QgsPoint(event.mapPoint().x(), event.mapPoint().y(), z)], self.canvas().mapUnitsPerPixel()*2)
         self.onEdit()
 
     def cadCanvasMoveEvent(self, event):
+        if self.mStartMovingPoint is not None:
+            self.moveSelection(event.mapPoint())
+            return
         if self.mCurrentState == 'ForceByLines':
             self.updateForcingLinePreview(event.mapPoint())
             return
@@ -350,6 +364,10 @@ class QgsMapToolEditMeshFrame(QgsMapToolAdvancedDigitizing):
 
     def cadCanvasReleaseEvent(self, event):
         if not self.editor(): return
+        if self.mStartMovingPoint is not None:
+            if event.button() == Qt.RightButton: self.cancelMovingSelection()
+            elif event.button() == Qt.LeftButton: self.applyMovingSelection(event.mapPoint())
+            return
         if self.mCurrentState == 'ForceByLines':
             self.forceByLineReleaseEvent(event)
             return
@@ -368,6 +386,8 @@ class QgsMapToolEditMeshFrame(QgsMapToolAdvancedDigitizing):
             if index is not None and event.modifiers() & Qt.ControlModifier:
                 if index not in self.mFaceVertices: self.mFaceVertices.append(index)
                 self.setSelectedVertices(self.mFaceVertices)
+            elif index in self.mSelectedVertices and not event.modifiers() & Qt.ShiftModifier and not self.mFaceVertices:
+                self.startMovingSelection(event.mapPoint())
             else: self.setSelectedVertices([] if index is None else [index], self.behavior(event.modifiers()))
         elif event.button() == Qt.RightButton:
             if self.mFaceVertices:
@@ -383,6 +403,75 @@ class QgsMapToolEditMeshFrame(QgsMapToolAdvancedDigitizing):
                     menu.addAction(self.mActions[key])
                 menu.exec_(self.canvas().mapToGlobal(event.pos()))
                 menu.deleteLater()
+
+    def startMovingSelection(self, mapPoint):
+        if not self.editor() or not self.mSelectedVertices: return False
+        self.mMovingLayer = self.layer()
+        self.mMovingVertices = sorted(self.mSelectedVertices.intersection(self.vertices()))
+        if not self.mMovingVertices: return False
+        self.mStartMovingPoint = QgsPointXY(mapPoint)
+        if self.mZValueWidget is not None: self.mZValueWidget.setEnabled(False)
+        self.cadDockWidget().setPoints([self.mStartMovingPoint, self.mStartMovingPoint])
+        self.moveSelection(mapPoint)
+        return True
+
+    def movingSelectionTransform(self, destination):
+        if self.mStartMovingPoint is None or self.layer() is not self.mMovingLayer or not self.editor(): return None
+        try:
+            start = self.toLayerCoordinates(self.mMovingLayer, self.mStartMovingPoint)
+            end = self.toLayerCoordinates(self.mMovingLayer, destination)
+        except QgsCsException: return None
+        dx, dy = end.x() - start.x(), end.y() - start.y()
+        if not math.isfinite(dx) or not math.isfinite(dy): return None
+        transform = QgsMeshTransformVerticesByExpression()
+        transform.setInputVertices(self.mMovingVertices)
+        transform.setExpressions(f'$vertex_x + ({dx!r})', f'$vertex_y + ({dy!r})', '')
+        # calculate validates face orientation, overlaps and neighboring elements
+        # against the current edit mesh, including unsaved edits.
+        return transform if transform.calculate(self.mMovingLayer) else None
+
+    def moveSelection(self, destination):
+        transform = self.movingSelectionTransform(destination)
+        points = []
+        if self.layer() is not self.mMovingLayer:
+            self.cancelMovingSelection()
+            return False
+        try:
+            start = self.toLayerCoordinates(self.mMovingLayer, self.mStartMovingPoint)
+            end = self.toLayerCoordinates(self.mMovingLayer, destination)
+            for index in self.mMovingVertices:
+                vertex = self.vertices().get(index)
+                if vertex is not None:
+                    shifted = QgsPointXY(vertex.x() + end.x() - start.x(), vertex.y() + end.y() - start.y())
+                    points.append(self.toMapCoordinates(self.mMovingLayer, shifted))
+        except QgsCsException:
+            self.mMovingVerticesRubberBand.hide()
+            return False
+        self.mMovingVerticesRubberBand.setColor(QColor('limegreen' if transform is not None else 'red'))
+        self.mMovingVerticesRubberBand.setToGeometry(QgsGeometry.fromMultiPointXY(points), None)
+        self.mMovingVerticesRubberBand.show()
+        return transform is not None
+
+    def applyMovingSelection(self, destination):
+        transform = self.movingSelectionTransform(destination)
+        if transform is None:
+            self.warning('无法移动：位置会破坏网孔拓扑，或目标图层/坐标转换已不可用。可调整位置或按 Esc 取消。')
+            return False
+        self.cancelMovingSelection()
+        self.editor().advancedEdit(transform)
+        self.onEdit()
+        return True
+
+    def cancelMovingSelection(self):
+        wasMoving = self.mStartMovingPoint is not None
+        self.mStartMovingPoint = None
+        self.mMovingLayer = None
+        self.mMovingVertices = []
+        if not sip.isdeleted(self.mMovingVerticesRubberBand):
+            self.mMovingVerticesRubberBand.reset(Qgis.GeometryType.Point)
+            self.mMovingVerticesRubberBand.hide()
+        if self.mZValueWidget is not None: self.mZValueWidget.setEnabled(True)
+        if wasMoving and self.canvas().mapTool() is self: self.cadDockWidget().clearPoints()
 
     @staticmethod
     def behavior(modifiers):
@@ -569,6 +658,12 @@ class QgsMapToolEditMeshFrame(QgsMapToolAdvancedDigitizing):
         elif self.mSelectedFaces: self.warning('当前仅能缩放已选顶点；面的直接几何访问未绑定')
 
     def keyPressEvent(self, event):
+        if self.mStartMovingPoint is not None:
+            if event.key() == Qt.Key_Escape: self.cancelMovingSelection()
+            # Do not delete selected vertices while a movement is pending.
+            if event.key() in (Qt.Key_Escape, Qt.Key_Delete, Qt.Key_Backspace):
+                event.ignore()
+                return
         if self.mCurrentState == 'ForceByLines' and event.key() in (Qt.Key_Escape, Qt.Key_Backspace, Qt.Key_Delete):
             if event.key() == Qt.Key_Escape: self.mForcingPoints.clear()
             elif self.mForcingPoints: self.mForcingPoints.pop()
@@ -598,6 +693,7 @@ class QgsMapToolEditMeshFrame(QgsMapToolAdvancedDigitizing):
         for dialog in self.mDialogs:
             if not sip.isdeleted(dialog): dialog.close()
         if self.mTransformDockWidget: self.mTransformDockWidget.dispose()
-        for rubber in (self.mRubberBand, self.mSelectionRubberBand):
+        self.cancelMovingSelection()
+        for rubber in (self.mRubberBand, self.mSelectionRubberBand, self.mMovingVerticesRubberBand):
             self.canvas().scene().removeItem(rubber)
             sip.delete(rubber)
