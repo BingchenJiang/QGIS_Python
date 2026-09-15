@@ -24,10 +24,11 @@ def main():
     parser.add_argument('--remaining-actions-test', action='store_true', help='Run shape completion and mesh editing batch checks')
     parser.add_argument('--view-actions-test', action='store_true', help='Run report, elevation profile and version parser checks')
     parser.add_argument('--decoration-test', action='store_true', help='Run decoration actions, rendering and project roundtrip checks')
+    parser.add_argument('--trim-extend-test', action='store_true', help='Run trim/extend snapping, geometry and undo checks')
     parser.add_argument('--partial-actions-test', action='store_true', help='Run focused annotation editing and report grouping checks')
     parser.add_argument('--profile', default=str(ROOT / '.runtime/profile'))
     args = parser.parse_args()
-    args.smoke_test = args.smoke_test or args.labeling_test or args.annotation_test or args.data_actions_test or args.toolbar_test or args.shape_test or args.remaining_actions_test or args.view_actions_test or args.decoration_test or args.partial_actions_test
+    args.smoke_test = args.smoke_test or args.labeling_test or args.annotation_test or args.data_actions_test or args.toolbar_test or args.shape_test or args.remaining_actions_test or args.view_actions_test or args.decoration_test or args.partial_actions_test or args.trim_extend_test
     def stage(name):
         if args.smoke_test:
             path = ROOT / '.runtime/smoke-stages.txt'
@@ -86,7 +87,9 @@ def main():
         window.addProject(args.project)
     if args.smoke_test:
         def smoke():
-            if args.partial_actions_test:
+            if args.trim_extend_test:
+                from tests.src.python.test_qgisapp_trimextendfeature import run
+            elif args.partial_actions_test:
                 from tests.src.python.test_qgisapp_partialactions import run
             elif args.decoration_test:
                 from tests.src.python.test_qgisapp_decorations import run
@@ -116,6 +119,7 @@ def main():
                 reportName = 'remaining-actions-test.json' if args.remaining_actions_test else 'shape-test.json' if args.shape_test else 'toolbar-test.json' if args.toolbar_test else 'data-actions-test.json' if args.data_actions_test else 'annotation-test.json' if args.annotation_test else 'labeling-test.json' if args.labeling_test else 'smoke-test.json'
                 if args.view_actions_test: reportName = 'view-actions-test.json'
                 if args.decoration_test: reportName = 'decoration-test.json'
+                if args.trim_extend_test: reportName = 'trim-extend-test.json'
                 if args.partial_actions_test: reportName = 'partial-actions-test.json'
                 (out / reportName).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
                 stage('report-written')

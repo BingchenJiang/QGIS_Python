@@ -77,7 +77,7 @@ class QgsMapToolShapeAbstract(QgsMapToolAdvancedDigitizing):
             # Mixed 2D/3D control points may leave NaN ordinates in a 3D curve.
             # Preserve the constructor's finite values; fill only missing ones.
             for index in range(curve.numPoints()):
-                point = QgsPoint(curve.pointN(index))
+                point = curve.vertexAt(QgsVertexId(0, 0, index))
                 changed = False
                 if curve.is3D() and not isfinite(point.z()):
                     point.setZ(defaultZ)

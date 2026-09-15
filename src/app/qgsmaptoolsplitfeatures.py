@@ -1,5 +1,5 @@
 """Application geometry editing capture with the native CAD/snapping pipeline."""
-from qgis.core import Qgis, QgsGeometry, QgsFeatureRequest, QgsLineString, QgsVectorLayer, QgsProject, QgsCurvePolygon, QgsPointXY
+from qgis.core import Qgis, QgsGeometry, QgsFeatureRequest, QgsLineString, QgsVectorLayer, QgsProject, QgsCurvePolygon, QgsPointXY, QgsWkbTypes
 from qgis.PyQt.QtCore import Qt
 from qgis.gui import QgsMapToolCapture
 
@@ -46,9 +46,20 @@ class _GeometryEditCapture(QgsMapToolCapture):
                 result = layer.addCurvedRing(geometry.constGet().exteriorRing().clone())
                 success = (result[0] if isinstance(result, tuple) else result) == Qgis.GeometryOperationResult.Success
             elif self.mOperation == 'addPart':
-                # The QgsPoint overload preserves Z/M; the XY overload discarded them.
-                result = layer.addPartV2(points)
-                success = result == Qgis.GeometryOperationResult.Success
+                # The two point-list SIP overloads are ambiguous in 3.34. Pass
+                # the full native geometry to preserve curves, Z and M instead.
+                selected = list(layer.getSelectedFeatures())
+                success = False
+                if len(selected) == 1:
+                    feature = selected[0]
+                    edited = feature.geometry()
+                    parts = geometry.coerceToType(QgsWkbTypes.singleType(layer.wkbType()))
+                    result = edited.addPart(parts[0].constGet().clone(), layer.geometryType()) if parts else None
+                    if result == Qgis.GeometryOperationResult.Success:
+                        if not feature.hasGeometry() and QgsWkbTypes.isSingleType(layer.wkbType()) and layer.dataProvider().doesStrictFeatureTypeCheck():
+                            edited.convertToSingleType()
+                        success = layer.changeGeometry(feature.id(), edited)
+                        if success and QgsProject.instance().topologicalEditing(): layer.addTopologicalPoints(geometry)
             else:
                 candidates = layer.getSelectedFeatures() if layer.selectedFeatureCount() else layer.getFeatures(QgsFeatureRequest().setFilterRect(geometry.boundingBox()))
                 success = False

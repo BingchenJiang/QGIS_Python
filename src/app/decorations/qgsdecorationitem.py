@@ -33,6 +33,43 @@ class QgsDecorationItem(QObject):
         writer = project.writeEntryBool if isinstance(value, bool) else project.writeEntryDouble if isinstance(value, float) else project.writeEntry
         writer(self.mConfigurationName, '/' + key, value)
 
+    def readWriteContext(self):
+        from qgis.core import QgsReadWriteContext
+        context = QgsReadWriteContext()
+        context.setPathResolver(self.mApp.mProject.pathResolver())
+        return context
+
+    def readSymbol(self, key, fallback):
+        from qgis.PyQt.QtXml import QDomDocument
+        from qgis.core import QgsSymbolLayerUtils
+        document = QDomDocument()
+        xml = self.read(key, '')
+        if xml and document.setContent(xml)[0]:
+            symbol = QgsSymbolLayerUtils.loadSymbol(document.documentElement(), self.readWriteContext())
+            if isinstance(symbol, type(fallback)): return symbol
+        return fallback
+
+    def writeSymbol(self, key, symbol):
+        from qgis.PyQt.QtXml import QDomDocument
+        from qgis.core import QgsSymbolLayerUtils
+        document = QDomDocument()
+        document.appendChild(QgsSymbolLayerUtils.saveSymbol(key, symbol, document, self.readWriteContext()))
+        self.write(key, document.toString())
+
+    def readTextFormat(self):
+        from qgis.PyQt.QtXml import QDomDocument
+        from qgis.core import QgsTextFormat
+        result, document = QgsTextFormat(), QDomDocument()
+        xml = self.read('Font', '')
+        if xml and document.setContent(xml)[0]: result.readXml(document.documentElement(), self.readWriteContext())
+        return result
+
+    def writeTextFormat(self, textFormat):
+        from qgis.PyQt.QtXml import QDomDocument
+        document = QDomDocument()
+        document.appendChild(textFormat.writeXml(document, self.readWriteContext()))
+        self.write('Font', document.toString())
+
     def projectRead(self):
         self.mEnabled = self.read('Enabled', False)
         self.mPlacement = self.read('Placement', self.defaultPlacement)

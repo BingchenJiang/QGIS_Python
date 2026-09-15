@@ -99,7 +99,7 @@ class QgsMapToolsDigitizingTechniqueManager:
                 button.setDefaultAction(action)
             app.mDynamicActions[item['sourceKey']] = {
                 'action': action, 'handler': 'setShapeTool', 'toolbar': item['toolbar'],
-                'note': getattr(cls, 'instructions', '预览/右键完成/取消/退点，正多边形边数') + '；原版元数据分组/图标、原生几何构造及父工具完成。目标 Z/M 维度、矩形/正多边形首个捕捉高程及半径圆弧 R 键圆心辅助已补入，待统一调试；复杂 Z/M 插值和拓扑仍待对齐。'}
+                'note': getattr(cls, 'instructions', '预览/右键完成/取消/退点，正多边形边数') + '；原版分组/图标、原生几何与父工具完成；目标 Z/M、平面捕捉高程、圆心辅助、圆弧续接、环/填充环/部件及新增要素拓扑已接入。17 个形状按钮与共用完成流程通过集中检查。'}
 
     def parentAvailable(self, parent):
         if parent is None or sip.isdeleted(parent): return False

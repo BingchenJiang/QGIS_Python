@@ -4,8 +4,8 @@ import json
 root = Path(__file__).resolve().parents[1]
 
 # Concrete omissions belonging to each action, not broad pending QA or an
-# unfinished neighboring action. Shapes still need complex Z/M/topology parity;
-# basic target dimensions, planar snapped Z and the radius arc center aid exist.
+# unfinished neighboring action. Shared shape capture, dimensions, topology,
+# ring/part completion and radius-arc continuation passed the shape batch.
 PARTIAL_ACTIONS = {
     'mActionEmbedLayers',                 # Individual embedded layers.
     'mesh:mActionDigitizing',             # Face/edge picking and movement; vertex movement exists.
@@ -26,7 +26,7 @@ def implementationState(action):
     if action.get('objectName') == 'mActionOptions': return 'paused'
     if action['status'] == 'not-ported': return 'not-ported'
     key = action.get('sourceKey') or action['objectName']
-    if key in PARTIAL_ACTIONS or key.startswith('shape:'): return 'partial'
+    if key in PARTIAL_ACTIONS: return 'partial'
     if key in PENDING_RUNTIME_ACTIONS: return 'implemented-pending-debug'
     return 'implemented'
 

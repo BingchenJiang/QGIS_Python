@@ -475,6 +475,9 @@ class QgisApp(QMainWindow):
         from .qgsmaptooldeletering import QgsMapToolDeleteRing
         self.mMapTools['deletePart'] = QgsMapToolDeletePart(canvas)
         self.mMapTools['deleteRing'] = QgsMapToolDeleteRing(canvas)
+        from .qgsmaptooltrimextendfeature import QgsMapToolTrimExtendFeature
+        self.mMapTools['trimExtendFeature'] = QgsMapToolTrimExtendFeature(canvas)
+        self.mMapTools['trimExtendFeature'].messageEmitted.connect(lambda message, level: self.mMessageBar.pushMessage('修剪/延伸', message, level=level))
         from .qgsmaptoolfillring import QgsMapToolFillRing
         from .qgsmaptoolfeatureaction import QgsMapToolFeatureAction
         self.mMapTools['fillRing'] = QgsMapToolFillRing(canvas, self.mAdvancedDigitizingDockWidget, self)
@@ -673,7 +676,7 @@ class QgisApp(QMainWindow):
             self.bind('mAction' + name, partial(self.setMapTool, tool), requirement)
         for name, tool in [('ReshapeFeatures', 'reshape'), ('SplitFeatures', 'split'),
                            ('SplitParts', 'splitParts'), ('AddRing', 'addRing'), ('AddPart', 'addPart'),
-                           ('DeleteRing', 'deleteRing'), ('DeletePart', 'deletePart')]:
+                           ('DeleteRing', 'deleteRing'), ('DeletePart', 'deletePart'), ('TrimExtendFeature', 'trimExtendFeature')]:
             action = getattr(self, 'mAction' + name)
             action.setCheckable(True)
             self.mMapToolActionGroup.addAction(action)
@@ -703,6 +706,10 @@ class QgisApp(QMainWindow):
             note = '原版 UI、应用/取消、画布覆盖层、位置/边距/单位、工程保存恢复、PNG/JPEG/PDF 装饰导出。'
             if name == 'Image': note += 'HTTP(S) 异步加载、base64/data URI、将本地/网络图片嵌入工程。'
             self.bind('mActionDecoration' + name, self.mDecorations[name].run, note=note)
+        self.bind('mActionDecorationGrid', self.mDecorations['Grid'].run,
+                  note='原版网格表单、线/标记符号、间隔/偏移、范围/栅格像元取值、四种坐标标注方向；原生网格渲染、工程保存及地图导出。')
+        self.bind('mActionDecorationLayoutExtent', self.mDecorations['LayoutExtent'].run,
+                  note='原版表单、已打开布局地图的范围及名称、符号/文本格式、跨 CRS 与旋转；布局变化同步、工程保存及地图导出。')
         self.bind('mActionNewReport', self.newReport, note='原生报表树、静态/字段分组章节与原版配置表单；嵌套分组、排序、独立页眉/正文/页脚开关、空组显示策略、章节移动/升降级/复制/删除、布局编辑、PDF 与 QGZ 保存。')
         self.bind('mActionElevationProfile', self.createElevationProfile, note='原生剖面画布、高程图层过滤/图例筛选/符号提示、勾选状态保存恢复、内部排序/跨树复制拖入、绘制/选中线/地图拾取、偏移、识别、测量及裁剪、捕捉与地图联动、十种单位、轴比例与 X 轴缩放、原版图片/PDF 导出设置表单及三类数据导出已接入；图层树核心检查通过，整体交互和导出结果待统一调试。')
         self.mActionModifyAnnotation.setCheckable(True)
@@ -711,6 +718,7 @@ class QgisApp(QMainWindow):
         self.bind('mActionModifyAnnotation', lambda: self.setMapTool('modifyAnnotation'), note='按渲染边界距离和 Z 顺序悬停拾取；原生 CAD、节点与几何预览、点击移动/确认、Esc/右键取消、节点增删、方向键移动及旋转画布换算；同步属性面板和删除清理。')
         self.bind('mActionAbout', self.about)
         self.bind('mActionEmbedLayers', self.embedLayers, note='原生组嵌入、QGS/QGZ 选择树与引用保存；3.34 未导出单图层嵌入接口，该分支仍未移植。')
+        self.bind('mActionCustomProjection', self.customProjection, note='原版 CRS 表单及原生定义控件；WKT/PROJ 编辑、校验、增加/修改/批量删除、应用/取消、用户 CRS 注册表持久化。独立窗口承载，整体 Options 仍暂停。')
         self.bind('mMainAnnotationLayerProperties', lambda: self.showLayerProperties(self.mProject.mainAnnotationLayer()), note='原版三页属性 UI、插件页面工厂/位置提示/同步/应用、QML/默认样式、动态样式新增/移除/重命名/切换及取消恢复已接入；本批插件页面和样式菜单待统一运行调试。')
         for name in ('TextAnnotation', 'SvgAnnotation', 'HtmlAnnotation', 'FormAnnotation'):
             key = name[0].lower() + name[1:]
@@ -1931,6 +1939,12 @@ class QgisApp(QMainWindow):
             self.addEmbeddedItems(dialog.selectedProjectFile(), dialog.selectedGroups(), dialog.selectedLayerIds())
         dialog.deleteLater()
 
+    def customProjection(self):
+        from .options.qgscustomprojectionoptions import QgsCustomProjectionDialog
+        dialog = QgsCustomProjectionDialog(self)
+        dialog.exec_()
+        dialog.deleteLater()
+
     def addEmbeddedItems(self, projectFile, groups, layerIds=()):
         if layerIds:
             self.mMessageBar.pushWarning('嵌入', '当前支持组嵌入；单图层嵌入接口尚未移植，请在源工程中将图层归组。')
@@ -2064,6 +2078,7 @@ class QgisApp(QMainWindow):
         from .layout.qgslayoutdesignerdialog import QgsLayoutDesignerDialog
         dialog = QgsLayoutDesignerDialog(self, layout)
         self.mLayoutDesigners.append(dialog)
+        self.mDecorations['LayoutExtent'].watchDesigner(dialog)
         dialog.show()
         return dialog
     def showLayoutManager(self):
@@ -2238,8 +2253,11 @@ class QgisApp(QMainWindow):
         from .decorations.qgsdecorationimage import QgsDecorationImage
         from .decorations.qgsdecorationnortharrow import QgsDecorationNorthArrow
         from .decorations.qgsdecorationscalebar import QgsDecorationScaleBar
+        from .decorations.qgsdecorationgrid import QgsDecorationGrid
+        from .decorations.qgsdecorationlayoutextent import QgsDecorationLayoutExtent
         from .decorations.qgsdecorationoverlay import QgsDecorationOverlay
         self.mDecorations = {name: cls(self) for name, cls in (
+            ('Grid', QgsDecorationGrid), ('LayoutExtent', QgsDecorationLayoutExtent),
             ('Image', QgsDecorationImage), ('Title', QgsDecorationTitle),
             ('Copyright', QgsDecorationCopyright), ('NorthArrow', QgsDecorationNorthArrow),
             ('ScaleBar', QgsDecorationScaleBar))}
